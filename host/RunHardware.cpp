@@ -1,5 +1,4 @@
 /// @author    Johannes de Fine Licht (definelicht@inf.ethz.ch)
-/// @date      June 2017
 /// @copyright This software is copyrighted under the BSD 3-Clause License.
 
 #include <algorithm>
@@ -11,6 +10,9 @@
 #include "Utility.h"
 #include "hlslib/xilinx/SDAccel.h"
 #include "hlslib/xilinx/Utility.h"
+#ifdef MM_POWER_METER
+#include "PowerMeter.h"
+#endif
 
 void PrintUsage() {
 #ifndef MM_DYNAMIC_SIZES
@@ -25,7 +27,6 @@ void PrintUsage() {
 }
 
 int main(int argc, char **argv) {
-
   std::default_random_engine rng(kSeed);
   typename std::conditional<std::is_integral<Data_t>::value,
                             std::uniform_int_distribution<unsigned long>,
@@ -55,18 +56,6 @@ int main(int argc, char **argv) {
     std::cerr << "M (" << size_m
               << ") must be divisable by the memory width in M ("
               << kMemoryWidthM << ")." << std::endl;
-    return 1;
-  }
-  if (size_n % kOuterTileSizeN != 0) {
-    std::cerr << "N (" << size_n
-              << ") must be divisable by the outer tile size in N ("
-              << kOuterTileSizeN << ")." << std::endl;
-    return 1;
-  }
-  if (size_m % kOuterTileSizeM != 0) {
-    std::cerr << "M (" << size_n
-              << ") must be divisable by the outer tile size in M ("
-              << kOuterTileSizeM << ")." << std::endl;
     return 1;
   }
 #else
@@ -104,7 +93,7 @@ int main(int argc, char **argv) {
   std::vector<MemoryPackK_t, hlslib::ocl::AlignedAllocator<MemoryPackK_t, 4096>>
       aMem;
   std::vector<MemoryPackM_t, hlslib::ocl::AlignedAllocator<MemoryPackM_t, 4096>>
-       bMem, cMem;
+      bMem, cMem;
   std::cout << "Initializing host memory..." << std::flush;
   if (verify) {
     a = decltype(a)(size_n * size_k);
@@ -129,6 +118,7 @@ int main(int argc, char **argv) {
     auto program = context.MakeProgram(path);
 
     std::cout << "Initializing device memory...\n" << std::flush;
+#ifdef MM_TWO_DIMMS
     auto aDevice = context.MakeBuffer<MemoryPackK_t, hlslib::ocl::Access::read>(
         hlslib::ocl::MemoryBank::bank0, size_n * size_k / kMemoryWidthK);
     auto bDevice = context.MakeBuffer<MemoryPackM_t, hlslib::ocl::Access::read>(
@@ -136,6 +126,15 @@ int main(int argc, char **argv) {
     auto cDevice =
         context.MakeBuffer<MemoryPackM_t, hlslib::ocl::Access::write>(
             hlslib::ocl::MemoryBank::bank1, size_n * size_m / kMemoryWidthM);
+#else
+    auto aDevice = context.MakeBuffer<MemoryPackK_t, hlslib::ocl::Access::read>(
+        size_n * size_k / kMemoryWidthK);
+    auto bDevice = context.MakeBuffer<MemoryPackM_t, hlslib::ocl::Access::read>(
+        size_k * size_m / kMemoryWidthM);
+    auto cDevice =
+        context.MakeBuffer<MemoryPackM_t, hlslib::ocl::Access::write>(
+            size_n * size_m / kMemoryWidthM);
+#endif
 
     if (verify) {
       std::cout << "Copying memory to device...\n" << std::flush;
@@ -153,8 +152,23 @@ int main(int argc, char **argv) {
                                      bDevice, cDevice, size_n, size_k, size_m);
 #endif
 
+#ifdef MM_POWER_METER
+    PowerMeter pm(10);  // 10 ms sampling rate
+    pm.Start();
+#endif
+
     std::cout << "Executing kernel...\n" << std::flush;
     const auto elapsed = kernel.ExecuteTask();
+
+#ifdef MM_POWER_METER
+    pm.Stop();
+    const auto power = pm.GetSamples();
+    float average_power = 0;
+    for (auto &i : power) {
+      average_power += std::get<1>(i);
+    }
+    average_power /= power.size();
+#endif
 
     const auto perf = 1e-9 *
                       (2 * static_cast<float>(size_n) * size_k * size_m) /
@@ -163,6 +177,11 @@ int main(int argc, char **argv) {
     std::cout << "Kernel executed in " << elapsed.first
               << " seconds, corresponding to a performance of " << perf
               << " GOp/s.\n";
+
+#ifdef MM_POWER_METER
+    std::cout << "Measured an average power of " << average_power
+              << " W for the full system.\n";
+#endif
 
     if (verify) {
       std::cout << "Copying back result...\n" << std::flush;
@@ -185,12 +204,18 @@ int main(int argc, char **argv) {
     // Convert to single element vector
     const auto cTest = Unpack<kMemoryWidthM>(cMem);
 
-    for (int i = 0; i < size_n; ++i) {
-      for (int j = 0; j < size_m; ++j) {
+    for (size_t i = 0; i < size_n; ++i) {
+      for (size_t j = 0; j < size_m; ++j) {
         const auto testVal = make_signed<Data_t>(cTest[i * size_m + j]);
         const auto refVal = make_signed<Data_t>(cRef[i * size_m + j]);
         const Data_t diff = std::abs(testVal - refVal);
-        if (diff / refVal > static_cast<Data_t>(1e-3)) {
+        bool mismatch;
+        if (std::is_floating_point<Data_t>::value) {
+          mismatch = diff / refVal > static_cast<Data_t>(1e-3);
+        } else {
+          mismatch = diff != 0;
+        }
+        if (mismatch) {
           std::cerr << "Mismatch at (" << i << ", " << j << "): " << testVal
                     << " vs. " << refVal << "\n";
           return 1;

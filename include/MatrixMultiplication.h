@@ -1,5 +1,4 @@
 /// @author    Johannes de Fine Licht (definelicht@inf.ethz.ch)
-/// @date      June 2018 
 /// @copyright This software is copyrighted under the BSD 3-Clause License. 
 
 #pragma once
@@ -8,9 +7,12 @@
 #include "Config.h"
 #include "hlslib/xilinx/DataPack.h"
 #include "hlslib/xilinx/Resource.h"
+#include "hlslib/xilinx/Stream.h"
+
+using hlslib::Stream;
 
 constexpr int kSeed = 5; // For initializing matrices for testing
-constexpr int kFifoDepth = 8;
+constexpr unsigned kPipeDepth = 4;
 
 // Memory bus in K-dimension
 constexpr int kMemoryWidthK = kMemoryWidthBytesK / sizeof(Data_t);
@@ -85,14 +87,12 @@ static_assert(kInnerTileSizeN % kComputeTileSizeN == 0,
 static_assert(kSizeK % kMemoryWidthK == 0,
               "K must be divisable by memory width.");
 
-static_assert(kSizeM % kMemoryWidthM == 0,
-              "M must be divisable by memory width.");
+#ifndef MM_TRANSPOSED_A
 
-static_assert(kSizeN % kOuterTileSizeN == 0,
-              "N must be divisable by the outer tile size in N.");
+static_assert(kSizeK % kTransposeWidth == 0,
+              "K must be divisable by the transpose width.");
 
-static_assert(kSizeM % kOuterTileSizeM == 0,
-              "M must be divisable by the outer tile size in M.");
+#endif
 
 #endif
 
@@ -108,12 +108,12 @@ inline unsigned SizeMMemory(unsigned m) {
 
 inline unsigned OuterTilesN(unsigned n) {
   #pragma HLS INLINE
-  return n / kOuterTileSizeN;
+  return (n + kOuterTileSizeN - 1) / kOuterTileSizeN;
 }
 
 inline unsigned OuterTilesM(unsigned m) {
   #pragma HLS INLINE
-  return m / kOuterTileSizeM;
+  return (m + kOuterTileSizeM - 1) / kOuterTileSizeM;
 }
 
 inline unsigned long TotalReadsFromA(const unsigned size_n,

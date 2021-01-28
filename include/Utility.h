@@ -1,6 +1,5 @@
 /// @author    Johannes de Fine Licht (definelicht@inf.ethz.ch)
-/// @date      June 2017 
-/// @copyright This software is copyrighted under the BSD 3-Clause License. 
+/// @copyright This software is copyrighted under the BSD 3-Clause License.
 
 #pragma once
 
@@ -10,8 +9,8 @@
 #include <iterator>
 #include <sstream>
 #include <vector>
-#include "hlslib/xilinx/SDAccel.h"
 #include "MatrixMultiplication.h"
+#include "hlslib/xilinx/SDAccel.h"
 #ifdef MM_HAS_BLAS
 #include "cblas.h"
 #endif
@@ -37,7 +36,7 @@ void Naive(IteratorRead aBegin, IteratorRead bBegin, IteratorWrite cBegin,
         const auto elemB = bBegin[k * sizeM + m];
         acc = OperatorReduce::Apply(acc, OperatorMap::Apply(elemA, elemB));
       }
-      cBegin[n * sizeM + m] = acc; 
+      cBegin[n * sizeM + m] = acc;
     }
   }
 }
@@ -120,5 +119,11 @@ make_signed(T val) {
 template <typename T>
 typename std::enable_if<std::is_floating_point<T>::value, T>::type make_signed(
     T val) {
+  return val;
+}
+
+template <typename T>
+typename std::enable_if<std::is_same<T, half>::value, half>::type make_signed(
+    half val) {
   return val;
 }
